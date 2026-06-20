@@ -709,6 +709,63 @@ describe('createMemoizedSelector', () => {
     expect(resultEqualityCheckSpy).not.toHaveBeenCalled()
   })
 
+  test('updates the cache key even if resultEqualityCheck is a hit', () => {
+    const resultFunc = vi.fn((x: string) => x)
+    const resultEqualityCheck = vi.fn(
+      (a: string, b: string) => typeof a === typeof b
+    )
+
+    const createSelector = createMemoizedSelector({ maxSize: 1 })
+    const selector = createSelector(
+      (state: { value: string }) => state.value,
+      resultFunc,
+      {
+        memoizeOptions: { resultEqualityCheck },
+        devModeChecks: { identityFunctionCheck: 'never', inputStabilityCheck: 'never' }
+      }
+    )
+
+    selector({ value: 'cache this result' })
+    expect(resultFunc).toBeCalledTimes(1)
+
+    const result = selector({ value: 'arg1' })
+    expect(resultEqualityCheck).toHaveLastReturnedWith(true)
+    expect(result).toBe('cache this result')
+    expect(resultFunc).toBeCalledTimes(2)
+
+    const result2 = selector({ value: 'arg1' })
+    expect(result2).toBe('cache this result')
+    expect(resultFunc).toBeCalledTimes(2)
+  })
+
+  test('cache miss identifier does not collide with state values', () => {
+    const state = ['NOT_FOUND', 'FOUND']
+
+    type State = typeof state
+
+    const createSelector = createMemoizedSelector({ maxSize: 10 }).withTypes<State>()
+
+    const selector = createSelector(
+      [(s: State, id: number) => s[id]],
+      s => s,
+      {
+        devModeChecks: { identityFunctionCheck: 'never', inputStabilityCheck: 'never' }
+      }
+    )
+
+    const firstResult = selector(state, 0)
+
+    expect(selector(state, 1)).toBe(selector(state, 1))
+
+    const secondResult = selector(state, 0)
+
+    expect(secondResult).toBe('NOT_FOUND')
+
+    expect(firstResult).toBe(secondResult)
+
+    expect(selector.recomputations()).toBe(2)
+  })
+
   test('Large scale LRU cache stress test', () => {
     const maxSize = 100
     const createSelector = createMemoizedSelector({ maxSize })
