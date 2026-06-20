@@ -1,6 +1,11 @@
 export { autotrackMemoize as unstable_autotrackMemoize } from './autotrackMemoize/autotrackMemoize'
 export { createSelector, createSelectorCreator } from './createSelectorCreator'
 export type { CreateSelectorFunction } from './createSelectorCreator'
+export { createMemoizedSelector } from './createMemoizedSelector'
+export type {
+  CreateMemoizedSelectorOptions,
+  MemoizedSelectorFields
+} from './createMemoizedSelector'
 export { createStructuredSelector } from './createStructuredSelector'
 export type {
   RootStateSelectors,
