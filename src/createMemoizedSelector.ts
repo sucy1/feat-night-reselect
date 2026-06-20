@@ -7,6 +7,8 @@ import type {
 } from './types'
 
 import { createSelectorCreator } from './createSelectorCreator'
+import type { NOT_FOUND_TYPE } from './utils'
+import { NOT_FOUND } from './utils'
 
 interface CacheEntry<Result = unknown> {
   key: string
@@ -14,16 +16,41 @@ interface CacheEntry<Result = unknown> {
 }
 
 interface LruCache<Result = unknown> {
-  get(key: string): Result | undefined
+  get(key: string): Result | NOT_FOUND_TYPE
   put(key: string, value: Result): void
   getEntries(): CacheEntry<Result>[]
   clear(): void
 }
 
+function createSingletonCache<Result>(): LruCache<Result> {
+  let entry: CacheEntry<Result> | undefined
+
+  function get(key: string): Result | NOT_FOUND_TYPE {
+    if (entry && entry.key === key) {
+      return entry.value
+    }
+    return NOT_FOUND
+  }
+
+  function put(key: string, value: Result): void {
+    entry = { key, value }
+  }
+
+  function getEntries(): CacheEntry<Result>[] {
+    return entry ? [entry] : []
+  }
+
+  function clear(): void {
+    entry = undefined
+  }
+
+  return { get, put, getEntries, clear }
+}
+
 function createLruCache<Result>(maxSize: number): LruCache<Result> {
   let entries: CacheEntry<Result>[] = []
 
-  function get(key: string): Result | undefined {
+  function get(key: string): Result | NOT_FOUND_TYPE {
     const cacheIndex = entries.findIndex(entry => entry.key === key)
 
     if (cacheIndex > -1) {
@@ -37,11 +64,11 @@ function createLruCache<Result>(maxSize: number): LruCache<Result> {
       return entry.value
     }
 
-    return undefined
+    return NOT_FOUND
   }
 
   function put(key: string, value: Result): void {
-    if (get(key) === undefined) {
+    if (get(key) === NOT_FOUND) {
       entries.unshift({ key, value })
       if (entries.length > maxSize) {
         entries.pop()
@@ -82,7 +109,10 @@ export function createMemoizedSelector(
     func: Func,
     memoizeOptions?: { resultEqualityCheck?: EqualityFn<ReturnType<Func>> }
   ) {
-    const cache = createLruCache<ReturnType<Func>>(maxSize)
+    const effectiveMaxSize = maxSize > 1 ? maxSize : 1
+    const cache = effectiveMaxSize <= 1
+      ? createSingletonCache<ReturnType<Func>>()
+      : createLruCache<ReturnType<Func>>(effectiveMaxSize)
     const { resultEqualityCheck } = memoizeOptions || {}
 
     let resultsCount = 0
@@ -90,13 +120,13 @@ export function createMemoizedSelector(
     function memoized() {
       const args = Array.prototype.slice.call(arguments)
       const key = keySelector(args)
-      let value = cache.get(key) as ReturnType<Func> | undefined
+      let cacheResult = cache.get(key)
 
-      if (value === undefined) {
+      if (cacheResult === NOT_FOUND) {
         const newValue = func.apply(null, arguments as unknown as any[]) as ReturnType<Func>
         resultsCount++
 
-        value = newValue
+        let finalValue = newValue
 
         if (resultEqualityCheck) {
           const entries = cache.getEntries()
@@ -105,15 +135,16 @@ export function createMemoizedSelector(
           )
 
           if (matchingEntry) {
-            value = matchingEntry.value as ReturnType<Func>
+            finalValue = matchingEntry.value as ReturnType<Func>
             resultsCount !== 0 && resultsCount--
           }
         }
 
-        cache.put(key, value as ReturnType<Func>)
+        cache.put(key, finalValue)
+        return finalValue
       }
 
-      return value
+      return cacheResult as ReturnType<Func>
     }
 
     memoized.clearCache = () => {

@@ -434,4 +434,553 @@ describe('createMemoizedSelector', () => {
       expect(ids2).toEqual(ids1)
     }
   )
+
+  test('maxSize set to 0 defaults to size 1', () => {
+    const createSelector = createMemoizedSelector({ maxSize: 0 })
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: { id: number }) => state.id,
+      id => {
+        funcCalls++
+        return `result-${id}`
+      }
+    )
+
+    selector({ id: 1 })
+    expect(funcCalls).toBe(1)
+    expect(selector.cache.size).toBe(1)
+
+    selector({ id: 2 })
+    expect(funcCalls).toBe(2)
+    expect(selector.cache.size).toBe(1)
+
+    selector({ id: 1 })
+    expect(funcCalls).toBe(3)
+  })
+
+  test('maxSize set to negative number defaults to size 1', () => {
+    const createSelector = createMemoizedSelector({ maxSize: -5 })
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: { id: number }) => state.id,
+      id => {
+        funcCalls++
+        return `result-${id}`
+      }
+    )
+
+    selector({ id: 10 })
+    expect(funcCalls).toBe(1)
+
+    selector({ id: 20 })
+    expect(funcCalls).toBe(2)
+
+    selector({ id: 10 })
+    expect(funcCalls).toBe(3)
+  })
+
+  test('Caching a value of undefined works correctly', () => {
+    const createSelector = createMemoizedSelector({ maxSize: 3 })
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: { value?: number }) => state.value,
+      value => {
+        funcCalls++
+        return value !== undefined ? value * 2 : undefined
+      },
+      {
+        devModeChecks: { identityFunctionCheck: 'never' }
+      }
+    )
+
+    const result1 = selector({})
+    expect(funcCalls).toBe(1)
+    expect(result1).toBeUndefined()
+
+    const result2 = selector({})
+    expect(funcCalls).toBe(1)
+    expect(result2).toBeUndefined()
+
+    const result3 = selector({ value: 5 })
+    expect(funcCalls).toBe(2)
+    expect(result3).toBe(10)
+
+    const result4 = selector({})
+    expect(funcCalls).toBe(2)
+    expect(result4).toBeUndefined()
+    expect(result4).toBe(result1)
+  })
+
+  test('Cache eviction works correctly including undefined values', () => {
+    const createSelector = createMemoizedSelector({ maxSize: 2 })
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: { id: number }) => state.id,
+      id => {
+        funcCalls++
+        return id > 0 ? id * 10 : undefined
+      },
+      {
+        devModeChecks: { identityFunctionCheck: 'never' }
+      }
+    )
+
+    selector({ id: 0 })
+    expect(funcCalls).toBe(1)
+    expect(selector({ id: 0 })).toBeUndefined()
+
+    selector({ id: 1 })
+    expect(funcCalls).toBe(2)
+    expect(selector.cache.size).toBe(2)
+
+    selector({ id: 2 })
+    expect(funcCalls).toBe(3)
+    expect(selector.cache.size).toBe(2)
+
+    selector({ id: 0 })
+    expect(funcCalls).toBe(4)
+    expect(selector({ id: 0 })).toBeUndefined()
+    expect(funcCalls).toBe(4)
+  })
+
+  test('Caching null values works correctly', () => {
+    const createSelector = createMemoizedSelector({ maxSize: 2 })
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: { item: { id: number } | null }) => state.item,
+      item => {
+        funcCalls++
+        return item?.id ?? null
+      },
+      {
+        devModeChecks: { identityFunctionCheck: 'never' }
+      }
+    )
+
+    const result1 = selector({ item: null })
+    expect(funcCalls).toBe(1)
+    expect(result1).toBeNull()
+
+    const result2 = selector({ item: null })
+    expect(funcCalls).toBe(1)
+    expect(result2).toBeNull()
+
+    const result3 = selector({ item: { id: 42 } })
+    expect(funcCalls).toBe(2)
+    expect(result3).toBe(42)
+  })
+
+  test('Custom keySelector that generates same key for different args', () => {
+    const createSelector = createMemoizedSelector({
+      maxSize: 3,
+      keySelector: args => {
+        const [state] = args as [{ type: string; id: number; extra: string }]
+        return `${state.type}-${state.id}`
+      }
+    })
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: { type: string; id: number; extra: string }) => state,
+      state => {
+        funcCalls++
+        return `${state.type}-${state.id}-${state.extra}`
+      }
+    )
+
+    expect(selector({ type: 'user', id: 1, extra: 'first' })).toBe('user-1-first')
+    expect(funcCalls).toBe(1)
+
+    expect(selector({ type: 'user', id: 1, extra: 'second' })).toBe('user-1-first')
+    expect(funcCalls).toBe(1)
+
+    expect(selector({ type: 'post', id: 1, extra: 'third' })).toBe('post-1-third')
+    expect(funcCalls).toBe(2)
+
+    expect(selector({ type: 'user', id: 2, extra: 'fourth' })).toBe('user-2-fourth')
+    expect(funcCalls).toBe(3)
+  })
+
+  test('keySelector works with complex nested state arguments', () => {
+    const createSelector = createMemoizedSelector({ maxSize: 5 })
+
+    interface ComplexState {
+      user: {
+        profile: {
+          id: number
+          settings: { theme: string }
+        }
+      }
+    }
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: ComplexState) => state.user.profile.settings.theme,
+      theme => {
+        funcCalls++
+        return `theme:${theme}`
+      }
+    )
+
+    const state1: ComplexState = {
+      user: { profile: { id: 1, settings: { theme: 'dark' } } }
+    }
+
+    expect(selector(state1)).toBe('theme:dark')
+    expect(funcCalls).toBe(1)
+
+    expect(selector(state1)).toBe('theme:dark')
+    expect(funcCalls).toBe(1)
+
+    const state2: ComplexState = {
+      user: { profile: { id: 1, settings: { theme: 'light' } } }
+    }
+
+    expect(selector(state2)).toBe('theme:light')
+    expect(funcCalls).toBe(2)
+  })
+
+  test('resultEqualityCheck with keySelector preserves reference', () => {
+    const createSelector = createMemoizedSelector({ maxSize: 3 })
+
+    interface Todo {
+      id: number
+      name: string
+    }
+
+    const todos1: Todo[] = [
+      { id: 1, name: 'a' },
+      { id: 2, name: 'b' }
+    ]
+    const todos2: Todo[] = todos1.slice()
+    todos2[0] = { ...todos2[0], name: 'c' }
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: { todos: Todo[] }) => state.todos,
+      todos => {
+        funcCalls++
+        return todos.map(t => t.id)
+      },
+      {
+        memoizeOptions: {
+          resultEqualityCheck: (a: number[], b: number[]) =>
+            a.length === b.length && a.every((v, i) => v === b[i])
+        }
+      }
+    )
+
+    const ids1 = selector({ todos: todos1 })
+    expect(funcCalls).toBe(1)
+    expect(ids1).toEqual([1, 2])
+
+    const ids2 = selector({ todos: todos1 })
+    expect(funcCalls).toBe(1)
+    expect(ids2).toBe(ids1)
+
+    const ids3 = selector({ todos: todos2 })
+    expect(funcCalls).toBe(2)
+    expect(ids3).toBe(ids1)
+  })
+
+  test('resultEqualityCheck is not called on first computation', () => {
+    const resultEqualityCheckSpy = vi.fn((a: number[], b: number[]) =>
+      a.length === b.length && a.every((v, i) => v === b[i])
+    )
+
+    const createSelector = createMemoizedSelector({ maxSize: 3 })
+    const selector = createSelector(
+      (state: { items: number[] }) => state.items,
+      items => items.map(i => i * 2),
+      {
+        memoizeOptions: { resultEqualityCheck: resultEqualityCheckSpy }
+      }
+    )
+
+    selector({ items: [1, 2, 3] })
+    expect(resultEqualityCheckSpy).not.toHaveBeenCalled()
+
+    selector({ items: [1, 2, 3] })
+    expect(resultEqualityCheckSpy).not.toHaveBeenCalled()
+  })
+
+  test('Large scale LRU cache stress test', () => {
+    const maxSize = 100
+    const createSelector = createMemoizedSelector({ maxSize })
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: { id: number }) => state.id,
+      id => {
+        funcCalls++
+        return `result-${id}`
+      }
+    )
+
+    for (let i = 0; i < maxSize; i++) {
+      selector({ id: i })
+    }
+    expect(funcCalls).toBe(maxSize)
+    expect(selector.cache.size).toBe(maxSize)
+
+    for (let i = 0; i < maxSize; i++) {
+      selector({ id: i })
+    }
+    expect(funcCalls).toBe(maxSize)
+
+    selector({ id: maxSize + 1 })
+    expect(funcCalls).toBe(maxSize + 1)
+    expect(selector.cache.size).toBe(maxSize)
+
+    const cacheKeys = Array.from(selector.cache.keys())
+    expect(cacheKeys).not.toContain('[{"id":0}]')
+    expect(cacheKeys).toContain(`[{"id":${maxSize + 1}}]`)
+  })
+
+  test('LRU with interleaved access patterns', () => {
+    const createSelector = createMemoizedSelector({ maxSize: 4 })
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: { id: number }) => state.id,
+      id => {
+        funcCalls++
+        return id * 10
+      },
+      {
+        devModeChecks: { identityFunctionCheck: 'never', inputStabilityCheck: 'never' }
+      }
+    )
+
+    selector({ id: 1 })
+    selector({ id: 2 })
+    selector({ id: 3 })
+    selector({ id: 4 })
+    expect(funcCalls).toBe(4)
+
+    selector({ id: 2 })
+    selector({ id: 3 })
+    expect(funcCalls).toBe(4)
+
+    const keys1 = Array.from(selector.cache.keys())
+    expect(keys1[0]).toBe('[{"id":3}]')
+    expect(keys1[1]).toBe('[{"id":2}]')
+    expect(keys1[2]).toBe('[{"id":4}]')
+    expect(keys1[3]).toBe('[{"id":1}]')
+
+    selector({ id: 5 })
+    selector({ id: 6 })
+    expect(funcCalls).toBe(6)
+
+    const keys2 = Array.from(selector.cache.keys())
+    expect(keys2).toHaveLength(4)
+    expect(keys2).toContain('[{"id":6}]')
+    expect(keys2).toContain('[{"id":5}]')
+    expect(keys2).toContain('[{"id":3}]')
+    expect(keys2).toContain('[{"id":2}]')
+    expect(keys2).not.toContain('[{"id":1}]')
+    expect(keys2).not.toContain('[{"id":4}]')
+  })
+
+  test('memoizedResultFunc.cache exposes the result function cache', () => {
+    const createSelector = createMemoizedSelector({ maxSize: 3 })
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: { a: number; b: number }) => state.a,
+      (state: { a: number; b: number }) => state.b,
+      (a, b) => {
+        funcCalls++
+        return a + b
+      }
+    )
+
+    selector({ a: 1, b: 2 })
+    selector({ a: 3, b: 4 })
+
+    expect(selector.memoizedResultFunc.cache).toBeInstanceOf(Map)
+    expect(selector.memoizedResultFunc.cache.size).toBe(2)
+    expect(selector.memoizedResultFunc.cache.get('[1,2]')).toBe(3)
+    expect(selector.memoizedResultFunc.cache.get('[3,4]')).toBe(7)
+  })
+
+  test('withTypes with multiple input selectors and parameters', () => {
+    interface AppState {
+      users: { id: number; name: string; age: number }[]
+      posts: { userId: number; title: string }[]
+    }
+
+    const createSelector = createMemoizedSelector({ maxSize: 5 })
+    const createAppSelector = createSelector.withTypes<AppState>()
+
+    let funcCalls = 0
+    const selectUserPosts = createAppSelector(
+      [
+        state => state.users,
+        state => state.posts,
+        (state, userId: number) => userId
+      ],
+      (users, posts, userId) => {
+        funcCalls++
+        const user = users.find(u => u.id === userId)
+        const userPosts = posts.filter(p => p.userId === userId)
+        return { user, posts: userPosts }
+      }
+    )
+
+    const state: AppState = {
+      users: [
+        { id: 1, name: 'Alice', age: 30 },
+        { id: 2, name: 'Bob', age: 25 }
+      ],
+      posts: [
+        { userId: 1, title: 'Post 1' },
+        { userId: 1, title: 'Post 2' },
+        { userId: 2, title: 'Post 3' }
+      ]
+    }
+
+    const result1 = selectUserPosts(state, 1)
+    expect(funcCalls).toBe(1)
+    expect(result1.user?.name).toBe('Alice')
+    expect(result1.posts).toHaveLength(2)
+
+    const result2 = selectUserPosts(state, 1)
+    expect(funcCalls).toBe(1)
+    expect(result2).toBe(result1)
+
+    const result3 = selectUserPosts(state, 2)
+    expect(funcCalls).toBe(2)
+    expect(result3.user?.name).toBe('Bob')
+
+    const result4 = selectUserPosts(state, 1)
+    expect(funcCalls).toBe(2)
+    expect(result4).toBe(result1)
+  })
+
+  localTest(
+    'Multiple dispatches maintain cache correctly',
+    ({ store }) => {
+      const createSelector = createMemoizedSelector({ maxSize: 6 })
+
+      interface AppState extends RootState {}
+
+      const createAppSelector = createSelector.withTypes<AppState>()
+
+      let funcCalls = 0
+      const selectCompletedCount = createAppSelector(
+        [s => s.todos],
+        todos => {
+          funcCalls++
+          return todos.filter(t => t.completed).length
+        },
+        {
+          devModeChecks: { identityFunctionCheck: 'never' }
+        }
+      )
+
+      const initialCompleted = selectCompletedCount(store.getState())
+      expect(selectCompletedCount.dependencyRecomputations()).toBe(1)
+      const initialValue = initialCompleted
+
+      store.dispatch(toggleCompleted(0))
+      const afterToggle0 = selectCompletedCount(store.getState())
+      expect(selectCompletedCount.dependencyRecomputations()).toBe(2)
+
+      store.dispatch(toggleCompleted(1))
+      const afterToggle1 = selectCompletedCount(store.getState())
+      expect(selectCompletedCount.dependencyRecomputations()).toBe(3)
+
+      store.dispatch(toggleCompleted(2))
+      const afterToggle2 = selectCompletedCount(store.getState())
+      expect(selectCompletedCount.dependencyRecomputations()).toBe(4)
+
+      store.dispatch(toggleCompleted(3))
+      const afterToggle3 = selectCompletedCount(store.getState())
+      expect(selectCompletedCount.dependencyRecomputations()).toBe(5)
+
+      store.dispatch(toggleCompleted(4))
+      const afterToggle4 = selectCompletedCount(store.getState())
+      expect(selectCompletedCount.dependencyRecomputations()).toBe(6)
+
+      expect(selectCompletedCount.cache.size).toBeLessThanOrEqual(6)
+
+      const cacheSizeBefore = selectCompletedCount.cache.size
+      store.dispatch(toggleCompleted(5))
+      selectCompletedCount(store.getState())
+      expect(selectCompletedCount.cache.size).toBeLessThanOrEqual(6)
+      expect(selectCompletedCount.cache.size).toBe(cacheSizeBefore)
+    }
+  )
+
+  localTest(
+    'maxSize 0 or negative still works correctly with Redux store',
+    ({ store }) => {
+      for (const size of [0, -1, -10]) {
+        const createSelector = createMemoizedSelector({ maxSize: size })
+        interface AppState extends RootState {}
+
+        const createAppSelector = createSelector.withTypes<AppState>()
+
+        let funcCalls = 0
+        const selectTodoTitles = createAppSelector(
+          [s => s.todos],
+          todos => {
+            funcCalls++
+            return todos.map(t => t.title)
+          }
+        )
+
+        const titles1 = selectTodoTitles(store.getState())
+        expect(funcCalls).toBe(1)
+        expect(selectTodoTitles(store.getState())).toBe(titles1)
+        expect(funcCalls).toBe(1)
+
+        store.dispatch(toggleCompleted(0))
+
+        const titles2 = selectTodoTitles(store.getState())
+        expect(funcCalls).toBe(2)
+        expect(titles2).toEqual(titles1)
+      }
+    }
+  )
+
+  test('Key collision with custom keySelector still works correctly', () => {
+    const createSelector = createMemoizedSelector({
+      maxSize: 10,
+      keySelector: args => {
+        const [state] = args as [{ category: string; productId: number; variant: string }]
+        return `${state.category}-${state.productId}`
+      }
+    })
+
+    let funcCalls = 0
+    const selector = createSelector(
+      (state: { category: string; productId: number; variant: string }) => state,
+      state => {
+        funcCalls++
+        return `${state.category}-${state.productId}-${state.variant}`
+      }
+    )
+
+    expect(selector({ category: 'books', productId: 1, variant: 'hardcover' })).toBe(
+      'books-1-hardcover'
+    )
+    expect(funcCalls).toBe(1)
+
+    expect(selector({ category: 'books', productId: 1, variant: 'paperback' })).toBe(
+      'books-1-hardcover'
+    )
+    expect(funcCalls).toBe(1)
+
+    expect(selector({ category: 'books', productId: 2, variant: 'ebook' })).toBe(
+      'books-2-ebook'
+    )
+    expect(funcCalls).toBe(2)
+  })
 })
